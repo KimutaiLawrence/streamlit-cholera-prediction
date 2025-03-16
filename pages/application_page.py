@@ -3,13 +3,15 @@ import geemap.foliumap as geemap
 import ee
 import time  # For simulating loading effect
 
+st.set_page_config(page_title="🗺️ Cholera Prediction Application", layout="wide")
+
 # Initialize Earth Engine
 try:
     ee.Initialize()
 except Exception as e:
     st.error("Earth Engine authentication required. Run `earthengine authenticate` in your terminal.")
 
-st.set_page_config(page_title="🗺️ Cholera Prediction Application", layout="wide")
+# st.set_page_config(page_title="🗺️ Cholera Prediction Application", layout="wide")
 
 st.title("🗺️ Cholera Prediction Application")
 
