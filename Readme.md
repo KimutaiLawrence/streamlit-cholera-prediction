@@ -78,7 +78,7 @@ streamlit-cholera-prediction/
 ## 📝 Author
 
 👤 **Lawrence Kimutai**  
-📧 Email: [lawrence.kimtai@ramani.co.ke](mailto:lawrencekimutai001@gmail.com)  
+📧 Email: [lawrencekimutai001@gmail.com](mailto:lawrencekimutai001@gmail.com)  
 🔗 GitHub: [KimutaiLawrence](https://github.com/KimutaiLawrence)
 
 ---
