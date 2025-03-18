@@ -3,22 +3,12 @@ import geemap.foliumap as geemap
 import ee
 import time
 
-import json
-
-# Securely load the service account key
-EE_USER = "gee-service-account@analytical-rig-437519-k7.iam.gserviceaccount.com"
-EE_PRIVATE_KEY = "analytical-rig-437519-k7-86c701a6e623.json" 
-
-
 # Set page configuration
 st.set_page_config(page_title="🗺️ Cholera Prediction Application", layout="wide")
 
 # Initialize Earth Engine
 try:
-    with open(EE_PRIVATE_KEY) as key_file:
-        service_account_info = json.load(key_file)
-    credentials = ee.ServiceAccountCredentials(EE_USER, key_data=service_account_info)
-    ee.Initialize(credentials)
+    ee.Initialize()
 except Exception as e:
     st.error("Earth Engine authentication required. Run `earthengine authenticate` in your terminal.")
     st.stop()
@@ -116,18 +106,12 @@ if st.session_state.layers["Temperature"]:
 # Cholera Prediction Model (Weighted Overlay)
 if st.session_state.layers["Prediction Map"]:
     # Get max values for normalization
-    max_rainfall = rainfall.reduceRegion(ee.Reducer.max(), nairobi_bounds, 30).get("b1")
-    max_temperature = temperature.reduceRegion(ee.Reducer.max(), nairobi_bounds, 30).get("b1")
-
-if max_rainfall is not None and max_temperature is not None:
-    rainfall_scaled = rainfall.divide(ee.Image.constant(max_rainfall))
-    temperature_scaled = temperature.divide(ee.Image.constant(max_temperature))
-else:
-    st.error("Error computing max values for rainfall or temperature.")
+    max_rainfall = rainfall.reduceRegion(ee.Reducer.max(), nairobi_bounds, 30).values().get(0)
+    max_temperature = temperature.reduceRegion(ee.Reducer.max(), nairobi_bounds, 30).values().get(0)
 
     # Fix: Convert max values to ee.Image before division
-    # rainfall_scaled = rainfall.divide(ee.Image.constant(max_rainfall))
-    # temperature_scaled = temperature.divide(ee.Image.constant(max_temperature))
+    rainfall_scaled = rainfall.divide(ee.Image.constant(max_rainfall))
+    temperature_scaled = temperature.divide(ee.Image.constant(max_temperature))
     
     # Convert cholera cases to raster (1 where cases exist)
     cholera_raster = cholera_cases.reduceToImage(["ID"], ee.Reducer.first()).gt(0)
