@@ -20,10 +20,6 @@ streamlit-cholera-prediction/
 │   ├── project_info.py         # Overview of the project
 │   ├── cholera_prediction.py   # Main application with interactive map
 │   ├── about_author.py         # Information about the developer
-├── model/  # Machine learning model files
-│   ├── train_model.py          # Script for training the model
-│   ├── predict.py              # Script for making predictions
-├── data/  # Contains processed datasets
 ├── app.py  # Main entry point
 ├── requirements.txt  # Dependencies
 ├── README.md  # Project documentation
