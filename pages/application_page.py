@@ -3,6 +3,8 @@ import geemap.foliumap as geemap
 import ee
 import time
 
+m = geemap.Map()
+
 # Set page configuration
 st.set_page_config(page_title="🗺️ Cholera Prediction Application", layout="wide")
 
@@ -17,18 +19,17 @@ except Exception as e:
 st.title("🗺️ Cholera Prediction Application")
 
 # Create layout with two columns
-col1, col2 = st.columns([3, 1])  # Left (map) takes 3x space, right (controls) takes 1x space
+col1, col2 = st.columns([4, 1])  # Left (map) takes 4x space, right (controls) takes 1x space
 
 # Create interactive map in the left column
 with col1:
-    m = geemap.Map()
     m.add_basemap("HYBRID")
 
-# Right column for controls
-with col2:
+# Sidebar for controls
+with st.sidebar:
     st.subheader("🛠️ Layer Controls")
 
-    basemap = st.selectbox("Select Basemap", ["HYBRID", "ROADMAP", "SATELLITE", "TERRAIN"])
+    basemap = st.selectbox("Select Basemap", ["HYBRID", "OSM", "ROADMAP", "SATELLITE", "TERRAIN"])
     m.add_basemap(basemap)
 
     # Define session state for layers
@@ -37,10 +38,13 @@ with col2:
             "Cholera Cases": False,
             "Rivers (100m Buffer)": False,
             "Dumping Sites": False,
+            "Dumping Sites Buffer": False,  # Fix: Added missing entry
             "LULC": False,
             "Rainfall": False,
             "Temperature": False,
+            "Humidity": False,
             "Prediction Map": False,
+            "Cholera Risk Map": False,
         }
 
     def toggle_layer(layer_name):
@@ -48,89 +52,255 @@ with col2:
 
     # Dataset Fetching Section
     st.markdown("### 📂 Dataset Section")
-    
+   
     # Styled Buttons for Fetching Layers
     layer_buttons = {
         "Cholera Cases": "red",
         "Rivers (100m Buffer)": "blue",
         "Dumping Sites": "orange",
+        "Dumping Sites Buffer": "yellow",
         "LULC": "green",
         "Rainfall": "purple",
         "Temperature": "brown",
+        "Humidity": "brown",
+        "Cholera Risk Map": "brown",
     }
 
     for layer_name, color in layer_buttons.items():
-        if st.button(f"Toggle {layer_name}", key=layer_name):
+        if st.button(f"Fetch {layer_name}", key=layer_name):
             toggle_layer(layer_name)
 
-    # Load / Process Model Section
-    st.markdown("### ⚙️ Cholera Prediction Model")
-    if st.button("Run Prediction Model"):
-        with st.spinner("Processing model..."):
-            time.sleep(3)  # Simulate processing time
-            st.session_state.layers["Prediction Map"] = True
-        st.success("Prediction model generated successfully!")
-
-    # Show Results Section
-    st.markdown("### 📊 Show Results")
-    if st.button("View Prediction Results"):
-        st.info("Prediction results are now displayed on the map.")
 
 # Load GEE datasets
 cholera_cases = ee.FeatureCollection("projects/analytical-rig-437519-k7/assets/Cholera_Histo_Cases")
 rivers = ee.FeatureCollection("projects/analytical-rig-437519-k7/assets/Rivers-Bufzone_100m")
 dumping_sites = ee.FeatureCollection("projects/analytical-rig-437519-k7/assets/DumpingSites")
+dumping_sites_buffer = ee.FeatureCollection("projects/analytical-rig-437519-k7/assets/dampingSite_buff500m")
 lulc = ee.FeatureCollection("projects/analytical-rig-437519-k7/assets/LULC_2019")
 rainfall = ee.Image("projects/analytical-rig-437519-k7/assets/Rainfall_2020")
 temperature = ee.Image("projects/analytical-rig-437519-k7/assets/MMTemp_19")
+humidity = ee.Image("projects/analytical-rig-437519-k7/assets/RHU_2020")
+cholera_risk_map = ee.Image("projects/analytical-rig-437519-k7/assets/chorera_riskMap")
+
 
 # Load Nairobi Population FeatureCollection for zoom extent
 nairobi_population = ee.FeatureCollection("projects/analytical-rig-437519-k7/assets/Nairobi_Pop2019")
 nairobi_bounds = nairobi_population.geometry().bounds()
 m.centerObject(nairobi_bounds, 11)  # Adjust zoom level as needed
 
+
+# Define land use classification mapping
+lulc_classes = {
+    "transportation": 1,
+    "commercial": 2,
+    "industrial": 3,
+    "institutional": 4,
+    "res_slum": 5,
+    "residential": 6
+}
+
+
+# Define color palette
+lulc_palette = [
+    "#FF0000",  # Transportation (Red)
+    "#FFA500",  # Commercial (Orange)
+    "#808080",  # Industrial (Gray)
+    "#0000FF",  # Institutional (Blue)
+    "#8B0000",  # Residential Slum (Dark Red)
+    "#008000"   # Residential (Green)
+]
+
+
+# Convert string LANDUSE to numeric values
+def convert_landuse(feature):
+    landuse = feature.get("LANDUSE")  # Get LANDUSE value
+    value = ee.Dictionary(lulc_classes).get(landuse, 0)  # Assign numeric value, default to 0
+    return feature.set("LANDUSE_NUM", value)  # Create new numeric column
+
+
+lulc_numeric = lulc.map(convert_landuse)  # Apply transformation
+
+
+# Convert FeatureCollection to Image
+lulc_image = lulc_numeric.reduceToImage(
+    properties=['LANDUSE_NUM'],  # Use new numeric property
+    reducer=ee.Reducer.first()  # Take the first value for each pixel
+)
+
+
+# Apply color styling
+lulc_styled = lulc_image.visualize(
+    min=1, max=len(lulc_classes),
+    palette=lulc_palette
+)
+
+
+# Function to add a legend dynamically
+def add_legend():
+    """Displays a legend when the LULC layer is added."""
+    st.sidebar.markdown("### LULC Legend")
+    for i, (label, color) in enumerate(zip(lulc_classes.keys(), lulc_palette)):
+        st.sidebar.markdown(
+            f'<div style="display:flex;align-items:center;">'
+            f'<div style="width:20px;height:20px;background:{color};margin-right:10px;"></div>'
+            f'{label.capitalize()}</div>',
+            unsafe_allow_html=True
+        )
+
+
+rainfall_styled = rainfall.visualize(
+    min=0, max=200,  # Adjust max value based on dataset
+    palette=["blue", "green", "yellow", "red"]  # Blue (low) → Green → Yellow → Red (high)
+)
+
+temperature_styled = temperature.visualize(
+    min=10, max=40,  # Adjust min/max based on dataset
+    palette=["blue", "green", "yellow", "red"]  # Blue (cold) → Green → Yellow → Red (hot)
+)
+
+humidity_styled = humidity.visualize(
+    min=0, max=100,  # Adjust based on dataset
+    palette=["blue", "green", "yellow", "red"]  # Blue (low humidity) → Green → Yellow → Red (high humidity)
+)
+
+
+
+# Define layers and their styles
+layer_styles = {
+    "Cholera Cases": (cholera_cases, {"color": "red"}),
+    "Rivers (100m Buffer)": (rivers, {"color": "blue"}),
+    "Dumping Sites": (dumping_sites, {"color": "orange"}),
+    "Dumping Sites Buffer": (dumping_sites_buffer, {"color": "yellow"}),
+    "LULC": (lulc_styled, {}),
+    "Rainfall": (rainfall_styled, {}),
+    "Temperature": (temperature_styled, {}),
+    "Humidity": (humidity_styled, {}),
+    "Cholera Risk Map": (cholera_risk_map, {}),
+}
+
+
+legend_active = False  # Track if legend should be displayed
+
+
 # Add layers dynamically based on session state
-if st.session_state.layers["Cholera Cases"]:
-    m.addLayer(cholera_cases, {"color": "red"}, "Cholera Cases")
-if st.session_state.layers["Rivers (100m Buffer)"]:
-    m.addLayer(rivers, {"color": "blue"}, "Rivers (100m Buffer)")
-if st.session_state.layers["Dumping Sites"]:
-    m.addLayer(dumping_sites, {"color": "orange"}, "Dumping Sites")
-if st.session_state.layers["LULC"]:
-    m.addLayer(lulc, {}, "Land Use Land Cover (LULC)")
-if st.session_state.layers["Rainfall"]:
-    m.addLayer(rainfall, {}, "Rainfall 2020")
-if st.session_state.layers["Temperature"]:
-    m.addLayer(temperature, {}, "Mean Monthly Temperature 2019")
+for layer_name, dataset in layer_styles.items():
+    if st.session_state.layers.get(layer_name, False):  # Ensure it doesn't fail if the key is missing
+        m.addLayer(*dataset, layer_name)
+        if layer_name == "LULC":  
+            legend_active = True  # Set flag for legend
 
-# Cholera Prediction Model (Weighted Overlay)
-if st.session_state.layers["Prediction Map"]:
-    # Get max values for normalization
-    max_rainfall = rainfall.reduceRegion(ee.Reducer.max(), nairobi_bounds, 30).values().get(0)
-    max_temperature = temperature.reduceRegion(ee.Reducer.max(), nairobi_bounds, 30).values().get(0)
 
-    # Fix: Convert max values to ee.Image before division
-    rainfall_scaled = rainfall.divide(ee.Image.constant(max_rainfall))
-    temperature_scaled = temperature.divide(ee.Image.constant(max_temperature))
-    
-    # Convert cholera cases to raster (1 where cases exist)
-    cholera_raster = cholera_cases.reduceToImage(["ID"], ee.Reducer.first()).gt(0)
-    
-    # Weighted sum model for prediction
-    prediction = (
-        rainfall_scaled.multiply(0.4)  # 40% weight for rainfall
-        .add(temperature_scaled.multiply(0.3))  # 30% weight for temperature
-        .add(cholera_raster.multiply(0.3))  # 30% weight for past cases
+
+
+# Show or clear legend based on active layer
+if legend_active:
+    add_legend()
+else:
+    st.sidebar.markdown("")  # Clear legend when LULC is deselected
+
+# Function to run the ML-based analysis
+def run_analysis():
+    # init_ee()
+
+    # Load vector datasets
+    cholera_cases = ee.FeatureCollection("projects/analytical-rig-437519-k7/assets/Cholera_Histo_Cases")
+    rivers = ee.FeatureCollection("projects/analytical-rig-437519-k7/assets/Rivers-Bufzone_100m")
+    dumping_sites = ee.FeatureCollection("projects/analytical-rig-437519-k7/assets/DumpingSites")
+    population = ee.FeatureCollection("projects/analytical-rig-437519-k7/assets/Nairobi_Pop2019")  # AOI
+
+    # Define AOI
+    aoi = population.geometry()
+
+    # Load and preprocess raster datasets
+    rainfall = ee.Image("projects/analytical-rig-437519-k7/assets/Rainfall_2020").clip(aoi).select("b1").rename("Rainfall_Factor")
+    temperature = ee.Image("projects/analytical-rig-437519-k7/assets/MMTemp_19").clip(aoi).select("b1").rename("Temperature_Factor")
+    humidity = ee.Image("projects/analytical-rig-437519-k7/assets/RHU_2020").clip(aoi).select("b1").rename("Humidity")
+
+    # Convert vector to raster using proximity
+    river_distance = rivers.distance(5000).divide(5000).rename("River_Proximity").clip(aoi)
+    dumping_distance = dumping_sites.distance(5000).divide(5000).rename("Dumping_Proximity").clip(aoi)
+
+    def spatial_weight(img, radius, reducer):
+        kernel = ee.Kernel.circle(radius, "meters")
+        return img.reduceNeighborhood(reducer=reducer, kernel=kernel)
+
+    rainfall_weighted = spatial_weight(rainfall, 1000, ee.Reducer.mean()).rename("Rainfall_Weighted")
+    temperature_weighted = spatial_weight(temperature, 700, ee.Reducer.median()).rename("Temperature_Weighted")
+    humidity_weighted = spatial_weight(humidity, 500, ee.Reducer.mean()).rename("Humidity_Weighted")
+    river_weighted = spatial_weight(river_distance, 1200, ee.Reducer.min()).rename("River_Weighted")  # Lower distance = higher risk
+    dumping_weighted = spatial_weight(dumping_distance, 400, ee.Reducer.max()).rename("Dumping_Weighted")  # Worst pollution affects the most
+
+
+    # Feature extraction function
+    def extract_features(points):
+        return (
+            river_distance
+            .addBands(dumping_distance)
+            .addBands(rainfall)
+            .addBands(temperature)
+            .addBands(humidity)
+            .addBands(rainfall_weighted)
+            .addBands(temperature_weighted)
+            .addBands(humidity_weighted)
+            .addBands(river_weighted)
+            .addBands(dumping_weighted)
+            .sampleRegions(
+                collection=points,
+                scale=30,
+                properties=["label"],
+                tileScale=2
+            )
+        )
+
+    # Assign cholera cases a label of 1
+    cholera_samples = cholera_cases.map(lambda feature: feature.set("label", 1))
+
+    # Generate random points (label = 0)
+    random_points = ee.FeatureCollection.randomPoints(region=aoi, points=500, seed=42)
+    random_samples = random_points.map(lambda feature: feature.set("label", 0))
+
+    # Extract features and merge datasets
+    training_samples = extract_features(cholera_samples).merge(extract_features(random_samples))
+
+    # Define bands
+    bands = [
+        "Rainfall_Factor", "Temperature_Factor", "River_Proximity", "Dumping_Proximity", "Humidity",
+        "Rainfall_Weighted", "Temperature_Weighted", "Humidity_Weighted", "River_Weighted", "Dumping_Weighted"
+    ]
+
+    # Train a Random Forest model
+    classifier = ee.Classifier.smileRandomForest(50).train(
+        features=training_samples,
+        classProperty="label",
+        inputProperties=bands
     )
 
-    prediction_params = {
-        "min": 0,
-        "max": 1,
-        "palette": ["green", "yellow", "red"]
-    }
+    # Apply model for prediction
+    cholera_prediction = (
+        river_distance
+        .addBands(dumping_distance)
+        .addBands(rainfall)
+        .addBands(temperature)
+        .addBands(humidity)
+        .addBands(rainfall_weighted)
+        .addBands(temperature_weighted)
+        .addBands(humidity_weighted)
+        .addBands(river_weighted)
+        .addBands(dumping_weighted)
+        .classify(classifier)
+        .unmask(0)
+        .clip(aoi)
+    )
 
-    m.addLayer(prediction, prediction_params, "Cholera Prediction Map")
+    # Prediction visualization
+    prediction_vis = {"min": 0, "max": 1, "palette": ["green", "yellow", "red"]}
+    m.addLayer(cholera_prediction, prediction_vis, "ML-Based Cholera Risk Map")
 
-# Display map in the left column
-with col1:
-    m.to_streamlit(height=700)
+    st.success("Prediction Model running! Please wait and Check the map for results.")
+
+# Button to run analysis
+if st.sidebar.button("Run Cholera Risk Prediction model"):
+    run_analysis()
+
+# Display map in Streamlit
+m.to_streamlit()

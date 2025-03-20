@@ -19,4 +19,6 @@ This application aims to predict cholera outbreaks in **Nairobi, Kenya** using *
 1. **Data Ingestion**: Earth Engine processes raster and vector datasets.
 2. **Spatial Analysis**: Overlay cholera cases with environmental factors.
 3. **Visualization**: Interactive maps for pattern identification.
+         
+### Access the Google Earth Engine Code here: https://code.earthengine.google.com/788ad6fad8b41689578c3ec1fcf36232
 """)
