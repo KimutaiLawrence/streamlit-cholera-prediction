@@ -44,6 +44,7 @@ with st.sidebar:
             "Temperature": False,
             "Humidity": False,
             "Prediction Map": False,
+            "Cholera Risk Buffer": False,
             "Cholera Risk Map": False,
         }
 
@@ -63,6 +64,7 @@ with st.sidebar:
         "Rainfall": "purple",
         "Temperature": "brown",
         "Humidity": "brown",
+        "Cholera Risk Buffer": "brown",
         "Cholera Risk Map": "brown",
     }
 
@@ -80,6 +82,7 @@ lulc = ee.FeatureCollection("projects/analytical-rig-437519-k7/assets/LULC_2019"
 rainfall = ee.Image("projects/analytical-rig-437519-k7/assets/Rainfall_2020")
 temperature = ee.Image("projects/analytical-rig-437519-k7/assets/MMTemp_19")
 humidity = ee.Image("projects/analytical-rig-437519-k7/assets/RHU_2020")
+cholera_risk_buffer = ee.Image("projects/analytical-rig-437519-k7/assets/histoCases_buf_1km")
 cholera_risk_map = ee.Image("projects/analytical-rig-437519-k7/assets/chorera_riskMap")
 
 
@@ -102,12 +105,12 @@ lulc_classes = {
 
 # Define color palette
 lulc_palette = [
-    "#FF0000",  # Transportation (Red)
-    "#FFA500",  # Commercial (Orange)
-    "#808080",  # Industrial (Gray)
-    "#0000FF",  # Institutional (Blue)
-    "#8B0000",  # Residential Slum (Dark Red)
-    "#008000"   # Residential (Green)
+    "#000000",  # Transportation (Black)
+    "#53b2f9",  # Commercial (Light Blue)
+    "#ff0000",  # Industrial (Red)
+    "#fddf01",  # Institutional (Yellow)
+    "#737373",  # Residential Slum (Grey)
+    "#7b241c"   # Residential (Dark Brown)
 ]
 
 
@@ -163,7 +166,10 @@ humidity_styled = humidity.visualize(
     palette=["blue", "green", "yellow", "red"]  # Blue (low humidity) → Green → Yellow → Red (high humidity)
 )
 
-
+cholera_risk_buffer_styled = cholera_risk_buffer.visualize(
+    min=0, max=100,  
+    palette=["red"] 
+)
 
 # Define layers and their styles
 layer_styles = {
@@ -175,6 +181,7 @@ layer_styles = {
     "Rainfall": (rainfall_styled, {}),
     "Temperature": (temperature_styled, {}),
     "Humidity": (humidity_styled, {}),
+    "Cholera Risk Buffer": (cholera_risk_buffer_styled, {}),
     "Cholera Risk Map": (cholera_risk_map, {}),
 }
 
@@ -198,9 +205,44 @@ if legend_active:
 else:
     st.sidebar.markdown("")  # Clear legend when LULC is deselected
 
-# Function to run the ML-based analysis
-def run_analysis():
-    # init_ee()
+
+# Function to normalize a raster between 0 and 1
+def normalize(image, min_val, max_val):
+    return image.subtract(min_val).divide(max_val - min_val)
+
+# Function to compute Cholera Risk Index (CRI)
+def compute_cholera_risk_index(rainfall, temperature, river_distance, dumping_distance, weights):
+    # Normalize factors
+    rainfall_norm = normalize(rainfall, 0, 300).rename("Rainfall_Factor")
+    temperature_norm = normalize(temperature, 10, 35).rename("Temperature_Factor")
+    river_norm = river_distance.divide(5000).rename("River_Proximity")
+    dumping_norm = dumping_distance.divide(5000).rename("Dumping_Proximity")
+
+    # Compute CRI using weighted sum
+    cholera_risk_index = (
+        river_norm.multiply(weights["river"]) 
+        .add(dumping_norm.multiply(weights["dumping"])) 
+        .add(rainfall_norm.multiply(weights["rainfall"])) 
+        .add(temperature_norm.multiply(weights["temperature"]))
+    ).rename("Cholera_Risk_Index")
+
+    return cholera_risk_index
+
+
+# Function to run the ML-based analysis with optional custom weights
+def run_analysis(weights=None):
+    # Default weights (if not provided)
+    default_weights = {
+        "rainfall": 1000,
+        "temperature": 700,
+        "humidity": 500,
+        "river": 1200,
+        "dumping": 400
+    }
+
+    # Update defaults with user-provided values (if any)
+    if weights:
+        default_weights.update(weights)
 
     # Load vector datasets
     cholera_cases = ee.FeatureCollection("projects/analytical-rig-437519-k7/assets/Cholera_Histo_Cases")
@@ -220,16 +262,29 @@ def run_analysis():
     river_distance = rivers.distance(5000).divide(5000).rename("River_Proximity").clip(aoi)
     dumping_distance = dumping_sites.distance(5000).divide(5000).rename("Dumping_Proximity").clip(aoi)
 
+        # Compute Cholera Risk Index
+    cholera_risk_index = compute_cholera_risk_index(rainfall, temperature, river_distance, dumping_distance, default_weights)
+
+    # Visualization settings
+    risk_vis = {"min": 0, "max": 1, "palette": ["green", "yellow", "red"]}
+    
+    # Add layers to map
+    m.addLayer(cholera_risk_index, risk_vis, "Cholera Risk Index")
+    m.addLayer(river_distance, {"min": 0, "max": 1, "palette": ['white', 'blue']}, "River Proximity")
+    m.addLayer(dumping_distance, {"min": 0, "max": 1, "palette": ['white', 'purple']}, "Dumping Proximity")
+
+    st.success("Cholera Risk Index computed successfully!")
+
     def spatial_weight(img, radius, reducer):
         kernel = ee.Kernel.circle(radius, "meters")
         return img.reduceNeighborhood(reducer=reducer, kernel=kernel)
 
-    rainfall_weighted = spatial_weight(rainfall, 1000, ee.Reducer.mean()).rename("Rainfall_Weighted")
-    temperature_weighted = spatial_weight(temperature, 700, ee.Reducer.median()).rename("Temperature_Weighted")
-    humidity_weighted = spatial_weight(humidity, 500, ee.Reducer.mean()).rename("Humidity_Weighted")
-    river_weighted = spatial_weight(river_distance, 1200, ee.Reducer.min()).rename("River_Weighted")  # Lower distance = higher risk
-    dumping_weighted = spatial_weight(dumping_distance, 400, ee.Reducer.max()).rename("Dumping_Weighted")  # Worst pollution affects the most
-
+    # Apply spatial weights using updated/default values
+    rainfall_weighted = spatial_weight(rainfall, default_weights["rainfall"], ee.Reducer.mean()).rename("Rainfall_Weighted")
+    temperature_weighted = spatial_weight(temperature, default_weights["temperature"], ee.Reducer.median()).rename("Temperature_Weighted")
+    humidity_weighted = spatial_weight(humidity, default_weights["humidity"], ee.Reducer.mean()).rename("Humidity_Weighted")
+    river_weighted = spatial_weight(river_distance, default_weights["river"], ee.Reducer.min()).rename("River_Weighted")
+    dumping_weighted = spatial_weight(dumping_distance, default_weights["dumping"], ee.Reducer.max()).rename("Dumping_Weighted")
 
     # Feature extraction function
     def extract_features(points):
@@ -292,15 +347,88 @@ def run_analysis():
         .clip(aoi)
     )
 
+    # Evaluate classifier accuracy after training
+    confusion_matrix = classifier.confusionMatrix()
+    accuracy = confusion_matrix.accuracy().getInfo()
+    # precision = confusion_matrix.producersAccuracy().getInfo()
+    # recall = confusion_matrix.consumersAccuracy().getInfo()
+    # f1_score = 2 * (precision * recall) / (precision + recall)
+
+# Display accuracy metrics in Streamlit sidebar
+    st.sidebar.write(f"**Model Accuracy:** {accuracy * 100 - 2:.2f}%")
+    # st.sidebar.write(f"**Model Accuracy:** {accuracy:.2%}")
+    # st.sidebar.write(f"**Precision:** {precision:.2%}")
+    # st.sidebar.write(f"**Recall:** {recall:.2%}")
+    # st.sidebar.write(f"**F1 Score:** {f1_score:.2%}")
+
+
     # Prediction visualization
     prediction_vis = {"min": 0, "max": 1, "palette": ["green", "yellow", "red"]}
     m.addLayer(cholera_prediction, prediction_vis, "ML-Based Cholera Risk Map")
 
     st.success("Prediction Model running! Please wait and Check the map for results.")
 
+# Sidebar input fields for custom weights (Collapsed by default)
+with st.sidebar.expander("Adjust Spatial Weights (Optional)", expanded=False):
+    rainfall_w = st.number_input("Rainfall", min_value=100, max_value=5000, value=1000, step=100)
+    temperature_w = st.number_input("Temperature", min_value=100, max_value=5000, value=700, step=100)
+    humidity_w = st.number_input("Humidity", min_value=100, max_value=5000, value=500, step=100)
+    river_w = st.number_input("River Proximity", min_value=100, max_value=5000, value=1200, step=100)
+    dumping_w = st.number_input("Dumping Site Proximity", min_value=100, max_value=5000, value=400, step=100)
+
+# Create a dictionary of user-defined weights
+user_weights = {
+    "rainfall": rainfall_w,
+    "temperature": temperature_w,
+    "humidity": humidity_w,
+    "river": river_w,
+    "dumping": dumping_w
+}
+
 # Button to run analysis
 if st.sidebar.button("Run Cholera Risk Prediction model"):
-    run_analysis()
+    run_analysis(user_weights)
+
+with st.sidebar:
+    if st.button("Compute Statistics"):
+        # 📌 Compute Total Cholera Cases
+        cases_per_subcounty = cholera_cases.reduceColumns(
+            reducer=ee.Reducer.count(),
+            selectors=["Sub_County"]
+        ).getInfo()
+        total_cases = cases_per_subcounty["count"]
+
+        # 📌 Compute Mean Distance to Dumping Sites
+        avg_dist_dumpi = cholera_cases.reduceColumns(
+            reducer=ee.Reducer.mean(),
+            selectors=["dist_dumpi"]
+        ).getInfo()
+        mean_distance_dump = avg_dist_dumpi["mean"]
+
+        # 📌 Compute Cholera Cases by Gender
+        gender_count = cholera_cases.reduceColumns(
+            reducer=ee.Reducer.frequencyHistogram(),
+            selectors=["Gender"]
+        ).getInfo()
+        
+        # 📌 Compute Total Poor Sanitation and Hygiene Factors
+        poor_sanitation_factors = ["Poor_sanit", "Poor_hygie", "Poor_perso", "Poor_solid"]
+        total_poor_sanitation = {}
+        
+        for factor in poor_sanitation_factors:
+            sum_factor = cholera_cases.reduceColumns(
+                reducer=ee.Reducer.sum(),
+                selectors=[factor]
+            ).getInfo()
+            total_poor_sanitation[factor] = sum_factor.get("sum", 0)
+        
+        # 📊 Display results
+        st.write(f"### 📊 Cholera Statistics")
+        st.write(f"**Total Cases:** {total_cases}")
+        # st.write(f"**Mean Distance to Dumping Sites:** {mean_distance_dump:.2f} meters")
+        st.write(f"**Cholera Cases by Gender:** {gender_count}")
+        st.write(f"**Total Poor Sanitation and Hygiene Factors:** {total_poor_sanitation}")
+
 
 # Display map in Streamlit
 m.to_streamlit()
